@@ -128,7 +128,7 @@
   </div>
 
   <div class="map-wrap">
-    <iframe id="yandexFrame" src="https://yandex.ru"></iframe>
+    <iframe id="mapFrame" src="https://openstreetmap.org"></iframe>
   </div>
   <script>
     let currentMode = 'radius';
@@ -180,8 +180,12 @@
     });
 
     function moveMapTo(lat, lng, zoom) {
-      const frame = document.getElementById('yandexFrame');
-      frame.src = 'https://yandex.ru' + lng + '%2C' + lat + '&z=' + (zoom || 15) + '&pt=' + lng + '%2C' + lat + ',pm2rdm';
+      const frame = document.getElementById('mapFrame');
+      const latNum = parseFloat(lat);
+      const lngNum = parseFloat(lng);
+      const delta = (zoom && zoom >= 17) ? 0.0025 : 0.008;
+      const bbox = (lngNum - delta) + '%2C' + (latNum - delta) + '%2C' + (lngNum + delta) + '%2C' + (latNum + delta);
+      frame.src = 'https://openstreetmap.org' + bbox + '&layer=mapnik&marker=' + latNum + '%2C' + lngNum;
     }
 
     async function runAnalysis() {
