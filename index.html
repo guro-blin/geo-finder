@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GeoRadar — анализ локаций</title>
+  <link rel="stylesheet" href="https://unpkg.com" crossorigin="" />
+  <style>
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --border: #334155;
+      --text: #f8fafc; --muted: #94a3b8; --accent: #3b82f6;
+      --accent-hover: #2563eb; --success: #10b981;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+    body { background: var(--bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; }
+    .sidebar {
+      width: 400px; background: var(--panel); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; padding: 20px; overflow-y: auto; z-index: 10;
+    }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .header h1 { font-size: 20px; }
+    .settings-btn {
+      background: #334155; border: none; color: var(--text); padding: 6px 12px;
+      border-radius: 8px; font-size: 12px; cursor: pointer;
+    }
+    .api-box {
+      background: #0f172a; border: 1px solid var(--border); padding: 12px;
+      border-radius: 10px; margin-bottom: 16px; display: none;
+    }
+    .api-box.open { display: block; }
+    .api-row { display: flex; gap: 8px; margin-top: 6px; }
+    .api-row input { flex: 1; }
+    .save-key-btn {
+      background: var(--success); color: #fff; border: none; padding: 0 12px;
+      border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 12px;
+    }
+    .tabs { display: flex; background: #0f172a; padding: 4px; border-radius: 10px; margin-bottom: 14px; }
+    .tab {
+      flex: 1; text-align: center; padding: 8px; font-size: 13px; font-weight: bold;
+      border-radius: 8px; cursor: pointer; color: var(--muted);
+    }
+    .tab.active { background: var(--accent); color: #fff; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 6px; }
+    input[type="text"], input[type="password"], input[type="number"], textarea {
+      width: 100%; background: #0f172a; border: 1px solid var(--border); color: var(--text);
+      padding: 10px; border-radius: 8px; font-size: 14px; outline: none;
+    }
+    textarea { height: 80px; resize: vertical; }
+    .file-drop {
+      border: 1px dashed var(--border); border-radius: 8px; padding: 12px;
+      text-align: center; cursor: pointer; background: #0f172a; font-size: 13px; color: var(--muted);
+    }
+    #preview { max-width: 100%; max-height: 140px; border-radius: 8px; margin-top: 10px; display: none; }
+    .main-btn {
+      margin-top: 16px; width: 100%; padding: 12px; background: var(--accent); color: #fff;
+      border: none; border-radius: 10px; font-size: 15px; font-weight: bold; cursor: pointer;
+    }
+    .main-btn:disabled { background: #475569; cursor: not-allowed; }
+    .result-card {
+      margin-top: 16px; background: #0f172a; border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px; display: none; font-size: 13px; line-height: 1.5;
+    }
+    .result-card h3 { font-size: 15px; color: #60a5fa; margin-bottom: 6px; }
+    .badge {
+      display: inline-block; background: rgba(59, 130, 246, 0.2); color: #93c5fd;
+      padding: 2px 8px; border-radius: 6px; font-size: 11px; margin-bottom: 8px;
+    }
+    .poi-list { margin-top: 10px; padding-left: 16px; color: #cbd5e1; }
+    #map { flex: 1; height: 100vh; width: 100%; background: #1e293b; z-index: 1; }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="header">
+      <h1>🛰️ GeoRadar</h1>
+      <button class="settings-btn" id="keyToggleBtn" onclick="toggleApiBox()">🔑 API-ключ</button>
+    </div>
+
+    <div class="api-box" id="apiBox">
+      <label style="margin-top:0;">Ключ Mistral AI (сохранится навсегда):</label>
+      <div class="api-row">
+        <input type="password" id="apiKey" placeholder="Вставь ключ сюда...">
+        <button class="save-key-btn" onclick="saveApiKey()">Сохранить</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" id="tabRadius" onclick="switchMode('radius')">🚶 Радиус от точки</div>
+      <div class="tab" id="tabSearch" onclick="switchMode('search')">🏢 Поиск объекта / фото</div>
+    </div>
+
+    <div id="modeRadius">
+      <label>Отправная точка (метро, адрес, ориентир):</label>
+      <input type="text" id="startPoint" placeholder="Например: метро Молодёжная, Москва">
+
+      <label>Время в пути пешком (минут):</label>
+      <input type="number" id="walkMinutes" value="5" min="1" max="120">
+
+      <label>Дополнительные зацепки (необязательно):</label>
+      <textarea id="radiusHints" placeholder="Например: он шёл в какую-то школу..."></textarea>
+    </div>
+
+    <div id="modeSearch" style="display: none;">
+      <label>Загрузи фото места или здания (если есть):</label>
+      <div class="file-drop" onclick="document.getElementById('photoInput').click()">
+        📷 Нажми, чтобы выбрать фото
+        <input type="file" id="photoInput" accept="image/*" style="display:none;">
+      </div>
+      <img id="preview" alt="Предпросмотр">
+
+      <label>Наводящие подсказки (район, вывески, окружение):</label>
+      <textarea id="searchHints" placeholder="Например: район Сокол, рядом аптека и сквер..."></textarea>
+    </div>
+
+    <button class="main-btn" id="actionBtn" onclick="runAnalysis()">Построить зону поиска</button>
+
+    <div class="result-card" id="resultCard">
+      <span class="badge" id="resBadge">Анализ завершен</span>
+      <h3 id="resTitle"></h3>
+      <p id="resDesc"></p>
+      <ul class="poi-list" id="resList"></ul>
+    </div>
+  </div>
+
+  <div id="map"></div>
+  <script src="https://unpkg.com" crossorigin=""></script>
+  <script>
+    let currentMode = 'radius';
+    let base64Image = null;
+    let mapLayers = [];
+
+    const map = L.map('map').setView([55.7558, 37.6173], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    window.onload = () => {
+      setTimeout(() => { map.invalidateSize(); }, 200);
+      const savedKey = localStorage.getItem('mistral_api_key');
+      if (savedKey) {
+        document.getElementById('apiKey').value = savedKey;
+        document.getElementById('keyToggleBtn').textContent = '✅ Ключ активен';
+      } else {
+        document.getElementById('apiBox').classList.add('open');
+      }
+    };
+
+    function toggleApiBox() {
+      document.getElementById('apiBox').classList.toggle('open');
+    }
+
+    function saveApiKey() {
+      const val = document.getElementById('apiKey').value.trim();
+      if (!val) return alert('Вставь ключ в поле!');
+      localStorage.setItem('mistral_api_key', val);
+      document.getElementById('keyToggleBtn').textContent = '✅ Ключ активен';
+      document.getElementById('apiBox').classList.remove('open');
+    }
+
+    function switchMode(mode) {
+      currentMode = mode;
+      document.getElementById('tabRadius').classList.toggle('active', mode === 'radius');
+      document.getElementById('tabSearch').classList.toggle('active', mode === 'search');
+      document.getElementById('modeRadius').style.display = mode === 'radius' ? 'block' : 'none';
+      document.getElementById('modeSearch').style.display = mode === 'search' ? 'block' : 'none';
+      document.getElementById('actionBtn').textContent =
+        mode === 'radius' ? 'Построить зону поиска' : 'Найти объект на карте';
+    }
+
+    document.getElementById('photoInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        base64Image = ev.target.result;
+        const img = document.getElementById('preview');
+        img.src = base64Image;
+        img.style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    });
+
+    function clearMap() {
+      mapLayers.forEach(layer => map.removeLayer(layer));
+      mapLayers = [];
+    }
+
+    async function askMistral(apiKey, content) {
+      const payload = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: 'pixtral-12b-2409',
+          messages: [{ role: 'user', content: content }],
+          response_format: { type: "json_object" }
+        })
+      };
+      try {
+        const res = await fetch('https://mistral.ai', payload);
+        return await res.json();
+      } catch (e) {
+        const proxy = 'https://corsproxy.io?' + encodeURIComponent('https://mistral.ai');
+        const resProxy = await fetch(proxy, payload);
+        return await resProxy.json();
+      }
+    }
+
+    async function geocodeOSM(query) {
+      const url = `https://openstreetmap.org{encodeURIComponent(query)}&limit=1`;
+      const res = await fetch(url, { headers: { 'Accept-Language': 'ru' } });
+      const data = await res.json();
+      return data.length ? { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), name: data[0].display_name } : null;
+    }
+
+    async function findRealPlaces(lat, lng, radius, keyword) {
+      let filter = '["amenity"]';
+      if (keyword.includes('школ')) filter = '["amenity"="school"]';
+      else if (keyword.includes('кафе') || keyword.includes('кофе')) filter = '["amenity"~"cafe|restaurant"]';
+      else if (keyword.includes('аптек')) filter = '["amenity"="pharmacy"]';
+      else if (keyword.includes('магазин') || keyword.includes('тц')) filter = '["shop"]';
+      else if (keyword.includes('больниц') || keyword.includes('поликлиник')) filter = '["amenity"~"hospital|clinic"]';
+
+      const query = `[out:json][timeout:10];(node${filter}(around:${radius},${lat},${lng});way${filter}(around:${radius},${lat},${lng}););out center 10;`;
+      const res = await fetch('https://overpass-api.de', { method: 'POST', body: query });
+      const data = await res.json();
+      return data.elements.map(el => ({
+        name: (el.tags && (el.tags.name || el.tags['addr:street'])) || 'Объект на карте',
+        lat: el.lat || (el.center && el.center.lat),
+        lng: el.lon || (el.center && el.center.lon)
+      })).filter(item => item.lat && item.name !== 'Объект на карте');
+    }
+
+    async function runAnalysis() {
+      const apiKey = localStorage.getItem('mistral_api_key') || document.getElementById('apiKey').value.trim();
+      if (!apiKey) {
+        document.getElementById('apiBox').classList.add('open');
+        return alert('Сначала вставь и сохрани API-ключ!');
+      }
+
+      const btn = document.getElementById('actionBtn');
+      btn.disabled = true;
+      btn.textContent = 'Ищу на карте и анализирую...';
+
+      try {
+        clearMap();
+
+        if (currentMode === 'radius') {
+          const point = document.getElementById('startPoint').value.trim();
+          const mins = parseInt(document.getElementById('walkMinutes').value) || 10;
+          const hints = document.getElementById('radiusHints').value.trim().toLowerCase();
+          if (!point) throw new Error('Укажи отправную точку!');
+
+          const radiusMeters = mins * 75;
+          const geo = await geocodeOSM(point);
+          if (!geo) throw new Error('Не нашел точку. Напиши точнее, например: Москва, метро Молодежная');
+
+          let realPlaces = [];
+          try {
+            realPlaces = await findRealPlaces(geo.lat, geo.lng, radiusMeters, hints);
+          } catch (e) {}
+
+          const promptText = `Пользователь ищет друга. Точка: "${point}". Время пешком: ${mins} мин (радиус ${radiusMeters} м). Зацепки: "${hints || 'нет'}". Объекты с карты рядом: ${JSON.stringify(realPlaces)}. Напиши краткий вывод (2-3 предложения), куда вероятнее всего пошел человек. Верни JSON: {"summary": "твой вывод"}`;
+
+          let aiSummary = 'Зона пешей доступности построена по данным карты.';
+          try {
+            const aiData = await askMistral(apiKey, [{ type: "text", text: promptText }]);
+            if (aiData.choices && aiData.choices[0]) {
+              aiSummary = JSON.parse(aiData.choices[0].message.content).summary;
+            }
+          } catch (e) {}
+
+          drawResult(geo.name.split(',')[0], geo.lat, geo.lng, radiusMeters, aiSummary, realPlaces);
+        } else {
+          const hints = document.getElementById('searchHints').value.trim();
+          if (!base64Image && !hints) throw new Error('Загрузи фото или напиши подсказки!');
+
+          const promptText = `Ты эксперт по картам и OSINT. Определи место или учреждение по фото и подсказкам: "${hints || 'нет'}". Верни СТРОГО JSON: {"title": "Название и точный адрес", "lat": 55.7558, "lng": 37.6173, "radius": 250, "summary": "Объяснение по карте", "candidates": []}`;
+          const content = [{ type: "text", text: promptText }];
+          if (base64Image) content.push({ type: "image_url", image_url: base64Image });
+
+          const aiData = await askMistral(apiKey, content);
+          if (aiData.error) throw new Error(aiData.error.message);
+          const res = JSON.parse(aiData.choices[0].message.content);
+
+          drawResult(res.title, res.lat, res.lng, res.radius || 250, res.summary, res.candidates || []);
+        }
+      } catch (err) {
+        alert('Ошибка: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = currentMode === 'radius' ? 'Построить зону поиска' : 'Найти объект на карте';
+      }
+    }
+
+    function drawResult(title, lat, lng, radius, summary, candidates) {
+      const mainMarker = L.marker([lat, lng]).addTo(map).bindPopup(`<b>${title}</b>`).openPopup();
+      mapLayers.push(mainMarker);
+
+      const circle = L.circle([lat, lng], {
+        color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.18, radius: radius
+      }).addTo(map);
+      mapLayers.push(circle);
+
+      const listEl = document.getElementById('resList');
+      listEl.innerHTML = '';
+      candidates.forEach(c => {
+        const m = L.circleMarker([c.lat, c.lng], {
+          radius: 7, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.9
+        }).addTo(map).bindPopup(`<b>Объект:</b> ${c.name}`);
+        mapLayers.push(m);
+        const li = document.createElement('li');
+        li.textContent = c.name;
+        listEl.appendChild(li);
+      });
+
+      map.fitBounds(circle.getBounds(), { padding: [30, 30] });
+      document.getElementById('resBadge').textContent = currentMode === 'radius' ? `Зона ~${radius} м` : 'Объект найден';
+      document.getElementById('resTitle').textContent = title;
+      document.getElementById('resDesc').textContent = summary;
+      document.getElementById('resultCard').style.display = 'block';
+    }
+  </script>
+</body>
+</html>
