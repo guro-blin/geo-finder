@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GeoRadar — анализ локаций</title>
-  <link rel="stylesheet" href="https://cloudflare.com" />
+  <title>GeoRadar — OSINT и геоаналитика</title>
+  <link rel="stylesheet" href="https://jsdelivr.net" />
   <style>
     :root {
       --bg: #0f172a; --panel: #1e293b; --border: #334155;
@@ -66,7 +66,8 @@
       padding: 2px 8px; border-radius: 6px; font-size: 11px; margin-bottom: 8px;
     }
     .poi-list { margin-top: 10px; padding-left: 16px; color: #cbd5e1; }
-    #map { flex: 1; height: 100vh; background: #1e293b; z-index: 1; }
+    .poi-list li { margin-bottom: 5px; }
+    #map { flex: 1; height: 100vh; width: 100%; background: #1e293b; z-index: 1; }
   </style>
 </head>
 <body>
@@ -91,13 +92,13 @@
 
     <div id="modeRadius">
       <label>Отправная точка (метро, адрес, ориентир):</label>
-      <input type="text" id="startPoint" placeholder="Например: метро Молодёжная, Москва">
+      <input type="text" id="startPoint" placeholder="Например: Кремль, Москва">
 
       <label>Время в пути пешком (минут):</label>
       <input type="number" id="walkMinutes" value="5" min="1" max="120">
 
       <label>Дополнительные зацепки (необязательно):</label>
-      <textarea id="radiusHints" placeholder="Например: он шёл в какую-то школу..."></textarea>
+      <textarea id="radiusHints" placeholder="Например: шёл в какой-то ТЦ..."></textarea>
     </div>
 
     <div id="modeSearch" style="display: none;">
@@ -123,18 +124,19 @@
   </div>
 
   <div id="map"></div>
-  <script src="https://cloudflare.com"></script>
+  <script src="https://jsdelivr.net"></script>
   <script>
     let currentMode = 'radius';
     let base64Image = null;
     let mapLayers = [];
 
-    const map = L.map('map').setView([55.7558, 37.6173], 11);
-    L.tileLayer('https://{s}://{z}/{x}/{y}{r}.png', {
-      attribution: '© OpenStreetMap, © CARTO'
+    const map = L.map('map').setView([55.7558, 37.6173], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
     }).addTo(map);
 
-    window.onload = () => {
+    window.onload = function() {
+      setTimeout(function() { map.invalidateSize(); }, 300);
       const savedKey = localStorage.getItem('mistral_api_key');
       if (savedKey) {
         document.getElementById('apiKey').value = savedKey;
@@ -167,10 +169,10 @@
     }
 
     document.getElementById('photoInput').addEventListener('change', function(e) {
-      const file = e.target.files[0];
+      const file = e.target.files.item(0);
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = function(ev) {
         base64Image = ev.target.result;
         const img = document.getElementById('preview');
         img.src = base64Image;
@@ -180,54 +182,33 @@
     });
 
     function clearMap() {
-      mapLayers.forEach(layer => map.removeLayer(layer));
+      mapLayers.forEach(function(layer) { map.removeLayer(layer); });
       mapLayers = [];
     }
 
-    async function askMistral(apiKey, content) {
-      const payload = {
+    async function callMistralSafe(apiKey, content) {
+      const targetUrl = 'https://mistral.ai';
+      const options = {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + apiKey
+        },
         body: JSON.stringify({
           model: 'pixtral-12b-2409',
           messages: [{ role: 'user', content: content }],
-          response_format: { type: "json_object" }
+          response_format: { type: 'json_object' }
         })
       };
-      const res = await fetch('https://mistral.ai', payload);
-      return await res.json();
-    }
 
-    // Надежный геокодер Photon (OpenStreetMap без блокировок)
-    async function geocodePlace(query) {
-      const url = `https://komoot.io{encodeURIComponent(query)}&limit=1`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (!data.features || !data.features.length) return null;
-      const feat = data.features[0];
-      const coords = feat.geometry.coordinates;
-      const props = feat.properties;
-      const title = [props.name, props.city, props.street].filter(Boolean).join(', ') || query;
-      return { lat: coords[1], lng: coords[0], name: title };
-    }
-
-    // Поиск реальных объектов в радиусе через Overpass API
-    async function findRealPlaces(lat, lng, radius, keyword) {
-      let filter = '["amenity"]';
-      if (keyword.includes('школ')) filter = '["amenity"="school"]';
-      else if (keyword.includes('кафе') || keyword.includes('кофе')) filter = '["amenity"~"cafe|restaurant"]';
-      else if (keyword.includes('аптек')) filter = '["amenity"="pharmacy"]';
-      else if (keyword.includes('магазин') || keyword.includes('тц')) filter = '["shop"]';
-      else if (keyword.includes('больниц') || keyword.includes('поликлиник')) filter = '["amenity"~"hospital|clinic"]';
-
-      const query = `[out:json][timeout:10];(node${filter}(around:${radius},${lat},${lng});way${filter}(around:${radius},${lat},${lng}););out center 10;`;
-      const res = await fetch('https://overpass-api.de', { method: 'POST', body: query });
-      const data = await res.json();
-      return data.elements.map(el => ({
-        name: (el.tags && (el.tags.name || el.tags['addr:street'])) || 'Объект на карте',
-        lat: el.lat || (el.center && el.center.lat),
-        lng: el.lon || (el.center && el.center.lon)
-      })).filter(item => item.lat && item.name !== 'Объект на карте');
+      try {
+        const res = await fetch(targetUrl, options);
+        return await res.json();
+      } catch (err1) {
+        const proxyUrl = 'https://allorigins.win' + encodeURIComponent(targetUrl);
+        const res2 = await fetch(proxyUrl, options);
+        return await res2.json();
+      }
     }
 
     async function runAnalysis() {
@@ -239,85 +220,77 @@
 
       const btn = document.getElementById('actionBtn');
       btn.disabled = true;
-      btn.textContent = 'Ищу на карте и анализирую...';
+      btn.textContent = 'Анализирую карту...';
+
+      let promptText = '';
+      const content = [];
+
+      if (currentMode === 'radius') {
+        const point = document.getElementById('startPoint').value.trim();
+        const mins = parseInt(document.getElementById('walkMinutes').value) || 5;
+        const hints = document.getElementById('radiusHints').value.trim();
+        if (!point) {
+          btn.disabled = false;
+          btn.textContent = 'Построить зону поиска';
+          return alert('Укажи отправную точку!');
+        }
+        const radiusMeters = mins * 75;
+        promptText = 'Ты профессиональный геоаналитик. Отправная точка: "' + point + '". Время пешком: ' + mins + ' минут (радиус ' + radiusMeters + ' м). Зацепки: "' + (hints || 'нет') + '". Определи точные координаты отправной точки и 2-4 реальных объекта рядом в этом радиусе, подходящих под зацепки. Верни строго JSON без markdown: {"title": "Название точки", "lat": 55.7520, "lng": 37.6175, "radius": ' + radiusMeters + ', "summary": "Подробный разбор по карте", "candidates": [{"name": "Название и адрес объекта", "lat": 55.7547, "lng": 37.6215}]}';
+        content.push({ type: 'text', text: promptText });
+      } else {
+        const hints = document.getElementById('searchHints').value.trim();
+        if (!base64Image && !hints) {
+          btn.disabled = false;
+          btn.textContent = 'Найти объект на карте';
+          return alert('Загрузи фото или напиши подсказки!');
+        }
+        promptText = 'Ты эксперт по OSINT и картам. Найди конкретное место или учреждение по фото и подсказкам: "' + (hints || 'нет') + '". Верни строго JSON без markdown: {"title": "Название и точный адрес", "lat": 55.7558, "lng": 37.6173, "radius": 200, "summary": "Объяснение по карте и фото", "candidates": []}';
+        content.push({ type: 'text', text: promptText });
+        if (base64Image) content.push({ type: 'image_url', image_url: base64Image });
+      }
 
       try {
+        const data = await callMistralSafe(apiKey, content);
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+
+        const rawText = data.choices.item ? data.choices.item(0).message.content : data.choices.at(0).message.content;
+        const res = JSON.parse(rawText);
         clearMap();
 
-        if (currentMode === 'radius') {
-          const point = document.getElementById('startPoint').value.trim();
-          const mins = parseInt(document.getElementById('walkMinutes').value) || 10;
-          const hints = document.getElementById('radiusHints').value.trim().toLowerCase();
-          if (!point) throw new Error('Укажи отправную точку!');
+        const mainMarker = L.marker([res.lat, res.lng]).addTo(map).bindPopup('<b>' + res.title + '</b>').openPopup();
+        mapLayers.push(mainMarker);
 
-          const radiusMeters = mins * 75;
-          const geo = await geocodePlace(point);
-          if (!geo) throw new Error('Не нашел точку. Попробуй написать точнее, например: Москва метро Молодёжная');
+        const circle = L.circle([res.lat, res.lng], {
+          color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.2, radius: res.radius || 375
+        }).addTo(map);
+        mapLayers.push(circle);
 
-          let realPlaces = [];
-          try {
-            realPlaces = await findRealPlaces(geo.lat, geo.lng, radiusMeters, hints);
-          } catch (e) {}
-
-          const promptText = `Пользователь ищет друга. Точка: "${point}". Время пешком: ${mins} мин (радиус ${radiusMeters} м). Зацепки: "${hints || 'нет'}". Объекты с карты рядом: ${JSON.stringify(realPlaces)}. Напиши краткий вывод (2-3 предложения), куда вероятнее всего пошел человек. Верни JSON: {"summary": "твой вывод"}`;
-
-          let aiSummary = 'Зона пешей доступности построена по реальным данным карты.';
-          try {
-            const aiData = await askMistral(apiKey, [{ type: "text", text: promptText }]);
-            if (aiData.choices && aiData.choices[0]) {
-              aiSummary = JSON.parse(aiData.choices[0].message.content).summary;
-            }
-          } catch (e) {}
-
-          drawResult(geo.name, geo.lat, geo.lng, radiusMeters, aiSummary, realPlaces);
-        } else {
-          const hints = document.getElementById('searchHints').value.trim();
-          if (!base64Image && !hints) throw new Error('Загрузи фото или напиши подсказки!');
-
-          const promptText = `Ты эксперт по картам и OSINT. Определи место или учреждение по фото и подсказкам: "${hints || 'нет'}". Верни СТРОГО JSON: {"title": "Название и точный адрес", "lat": 55.7558, "lng": 37.6173, "radius": 250, "summary": "Объяснение по карте", "candidates": []}`;
-          const content = [{ type: "text", text: promptText }];
-          if (base64Image) content.push({ type: "image_url", image_url: base64Image });
-
-          const aiData = await askMistral(apiKey, content);
-          if (aiData.error) throw new Error(aiData.error.message);
-          const res = JSON.parse(aiData.choices[0].message.content);
-
-          drawResult(res.title, res.lat, res.lng, res.radius || 250, res.summary, res.candidates || []);
+        const listEl = document.getElementById('resList');
+        listEl.innerHTML = '';
+        if (res.candidates && res.candidates.length > 0) {
+          res.candidates.forEach(function(c) {
+            const m = L.circleMarker([c.lat, c.lng], {
+              radius: 8, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.9
+            }).addTo(map).bindPopup('<b>Возможная точка:</b> ' + c.name);
+            mapLayers.push(m);
+            const li = document.createElement('li');
+            li.textContent = c.name;
+            listEl.appendChild(li);
+          });
         }
+
+        map.setView([res.lat, res.lng], 15);
+        document.getElementById('resBadge').textContent = currentMode === 'radius' ? 'Зона ~' + res.radius + ' м' : 'Объект найден';
+        document.getElementById('resTitle').textContent = res.title;
+        document.getElementById('resDesc').textContent = res.summary;
+        document.getElementById('resultCard').style.display = 'block';
+
       } catch (err) {
-        alert('Ошибка: ' + err.message);
+        alert('Ошибка сети или ключа: ' + err.message + '\nПроверь, что ключ скопирован без пробелов и не включен блокировщик запросов.');
       } finally {
         btn.disabled = false;
         btn.textContent = currentMode === 'radius' ? 'Построить зону поиска' : 'Найти объект на карте';
       }
-    }
-
-    function drawResult(title, lat, lng, radius, summary, candidates) {
-      const mainMarker = L.marker([lat, lng]).addTo(map).bindPopup(`<b>${title}</b>`).openPopup();
-      mapLayers.push(mainMarker);
-
-      const circle = L.circle([lat, lng], {
-        color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.18, radius: radius
-      }).addTo(map);
-      mapLayers.push(circle);
-
-      const listEl = document.getElementById('resList');
-      listEl.innerHTML = '';
-      candidates.forEach(c => {
-        const m = L.circleMarker([c.lat, c.lng], {
-          radius: 7, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.9
-        }).addTo(map).bindPopup(`<b>Объект:</b> ${c.name}`);
-        mapLayers.push(m);
-        const li = document.createElement('li');
-        li.textContent = c.name;
-        listEl.appendChild(li);
-      });
-
-      map.fitBounds(circle.getBounds(), { padding: [30, 30] });
-      document.getElementById('resBadge').textContent = currentMode === 'radius' ? `Зона ~${radius} м` : 'Объект найден';
-      document.getElementById('resTitle').textContent = title;
-      document.getElementById('resDesc').textContent = summary;
-      document.getElementById('resultCard').style.display = 'block';
     }
   </script>
 </body>
