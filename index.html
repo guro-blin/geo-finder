@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GeoRadar — OSINT и геоаналитика</title>
-  <link rel="stylesheet" href="https://jsdelivr.net" />
+  <script src="https://yandex.ru" type="text/javascript"></script>
   <style>
     :root {
       --bg: #0f172a; --panel: #1e293b; --border: #334155;
@@ -124,19 +124,23 @@
   </div>
 
   <div id="map"></div>
-  <script src="https://jsdelivr.net"></script>
   <script>
     let currentMode = 'radius';
     let base64Image = null;
-    let mapLayers = [];
+    let myMap = null;
 
-    const map = L.map('map').setView([55.7558, 37.6173], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
+    // Запуск Яндекс Карт
+    if (typeof ymaps !== 'undefined') {
+      ymaps.ready(function () {
+        myMap = new ymaps.Map('map', {
+          center: [55.7558, 37.6173],
+          zoom: 12,
+          controls: ['zoomControl', 'typeSelector']
+        });
+      });
+    }
 
     window.onload = function() {
-      setTimeout(function() { map.invalidateSize(); }, 300);
       const savedKey = localStorage.getItem('mistral_api_key');
       if (savedKey) {
         document.getElementById('apiKey').value = savedKey;
@@ -181,14 +185,8 @@
       reader.readAsDataURL(file);
     });
 
-    function clearMap() {
-      mapLayers.forEach(function(layer) { map.removeLayer(layer); });
-      mapLayers = [];
-    }
-
-    async function callMistralSafe(apiKey, content) {
-      const targetUrl = 'https://mistral.ai';
-      const options = {
+    async function callMistral(apiKey, content) {
+      const response = await fetch('https://mistral.ai', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -199,16 +197,8 @@
           messages: [{ role: 'user', content: content }],
           response_format: { type: 'json_object' }
         })
-      };
-
-      try {
-        const res = await fetch(targetUrl, options);
-        return await res.json();
-      } catch (err1) {
-        const proxyUrl = 'https://allorigins.win' + encodeURIComponent(targetUrl);
-        const res2 = await fetch(proxyUrl, options);
-        return await res2.json();
-      }
+      });
+      return await response.json();
     }
 
     async function runAnalysis() {
@@ -250,43 +240,60 @@
       }
 
       try {
-        const data = await callMistralSafe(apiKey, content);
+        const data = await callMistral(apiKey, content);
         if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
-        const rawText = data.choices.item ? data.choices.item(0).message.content : data.choices.at(0).message.content;
+        const rawText = data.choices.at(0).message.content;
         const res = JSON.parse(rawText);
-        clearMap();
 
-        const mainMarker = L.marker([res.lat, res.lng]).addTo(map).bindPopup('<b>' + res.title + '</b>').openPopup();
-        mapLayers.push(mainMarker);
+        if (myMap) {
+          myMap.geoObjects.removeAll();
 
-        const circle = L.circle([res.lat, res.lng], {
-          color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.2, radius: res.radius || 375
-        }).addTo(map);
-        mapLayers.push(circle);
+          // Главная метка
+          const mainPlacemark = new ymaps.Placemark([res.lat, res.lng], {
+            balloonContent: '<b>' + res.title + '</b>'
+          }, { preset: 'islands#blueDotIcon' });
+          myMap.geoObjects.add(mainPlacemark);
+
+          // Зона поиска (круг)
+          const searchCircle = new ymaps.Circle([[res.lat, res.lng], res.radius || 375], {}, {
+            fillColor: '#3b82f633',
+            strokeColor: '#3b82f6',
+            strokeOpacity: 0.8,
+            strokeWidth: 2
+          });
+          myMap.geoObjects.add(searchCircle);
+
+          // Точки-кандидаты внутри зоны
+          if (res.candidates && res.candidates.length > 0) {
+            res.candidates.forEach(function(c) {
+              const candMark = new ymaps.Placemark([c.lat, c.lng], {
+                balloonContent: '<b>Возможная точка:</b> ' + c.name
+              }, { preset: 'islands#greenCircleDotIcon' });
+              myMap.geoObjects.add(candMark);
+            });
+          }
+
+          myMap.setCenter([res.lat, res.lng], 15);
+        }
 
         const listEl = document.getElementById('resList');
         listEl.innerHTML = '';
         if (res.candidates && res.candidates.length > 0) {
           res.candidates.forEach(function(c) {
-            const m = L.circleMarker([c.lat, c.lng], {
-              radius: 8, color: '#10b981', fillColor: '#10b981', fillOpacity: 0.9
-            }).addTo(map).bindPopup('<b>Возможная точка:</b> ' + c.name);
-            mapLayers.push(m);
             const li = document.createElement('li');
             li.textContent = c.name;
             listEl.appendChild(li);
           });
         }
 
-        map.setView([res.lat, res.lng], 15);
         document.getElementById('resBadge').textContent = currentMode === 'radius' ? 'Зона ~' + res.radius + ' м' : 'Объект найден';
         document.getElementById('resTitle').textContent = res.title;
         document.getElementById('resDesc').textContent = res.summary;
         document.getElementById('resultCard').style.display = 'block';
 
       } catch (err) {
-        alert('Ошибка сети или ключа: ' + err.message + '\nПроверь, что ключ скопирован без пробелов и не включен блокировщик запросов.');
+        alert('Ошибка: ' + err.message);
       } finally {
         btn.disabled = false;
         btn.textContent = currentMode === 'radius' ? 'Построить зону поиска' : 'Найти объект на карте';
