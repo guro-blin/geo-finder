@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GeoRadar — анализ локаций</title>
-  <link rel="stylesheet" href="https://unpkg.com" crossorigin="" />
+  <link rel="stylesheet" href="https://cloudflare.com" />
   <style>
     :root {
       --bg: #0f172a; --panel: #1e293b; --border: #334155;
@@ -66,7 +66,7 @@
       padding: 2px 8px; border-radius: 6px; font-size: 11px; margin-bottom: 8px;
     }
     .poi-list { margin-top: 10px; padding-left: 16px; color: #cbd5e1; }
-    #map { flex: 1; height: 100vh; width: 100%; background: #1e293b; z-index: 1; }
+    #map { flex: 1; height: 100vh; background: #1e293b; z-index: 1; }
   </style>
 </head>
 <body>
@@ -123,19 +123,18 @@
   </div>
 
   <div id="map"></div>
-  <script src="https://unpkg.com" crossorigin=""></script>
+  <script src="https://cloudflare.com"></script>
   <script>
     let currentMode = 'radius';
     let base64Image = null;
     let mapLayers = [];
 
     const map = L.map('map').setView([55.7558, 37.6173], 11);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap'
+    L.tileLayer('https://{s}://{z}/{x}/{y}{r}.png', {
+      attribution: '© OpenStreetMap, © CARTO'
     }).addTo(map);
 
     window.onload = () => {
-      setTimeout(() => { map.invalidateSize(); }, 200);
       const savedKey = localStorage.getItem('mistral_api_key');
       if (savedKey) {
         document.getElementById('apiKey').value = savedKey;
@@ -195,23 +194,24 @@
           response_format: { type: "json_object" }
         })
       };
-      try {
-        const res = await fetch('https://mistral.ai', payload);
-        return await res.json();
-      } catch (e) {
-        const proxy = 'https://corsproxy.io?' + encodeURIComponent('https://mistral.ai');
-        const resProxy = await fetch(proxy, payload);
-        return await resProxy.json();
-      }
+      const res = await fetch('https://mistral.ai', payload);
+      return await res.json();
     }
 
-    async function geocodeOSM(query) {
-      const url = `https://openstreetmap.org{encodeURIComponent(query)}&limit=1`;
-      const res = await fetch(url, { headers: { 'Accept-Language': 'ru' } });
+    // Надежный геокодер Photon (OpenStreetMap без блокировок)
+    async function geocodePlace(query) {
+      const url = `https://komoot.io{encodeURIComponent(query)}&limit=1`;
+      const res = await fetch(url);
       const data = await res.json();
-      return data.length ? { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon), name: data[0].display_name } : null;
+      if (!data.features || !data.features.length) return null;
+      const feat = data.features[0];
+      const coords = feat.geometry.coordinates;
+      const props = feat.properties;
+      const title = [props.name, props.city, props.street].filter(Boolean).join(', ') || query;
+      return { lat: coords[1], lng: coords[0], name: title };
     }
 
+    // Поиск реальных объектов в радиусе через Overpass API
     async function findRealPlaces(lat, lng, radius, keyword) {
       let filter = '["amenity"]';
       if (keyword.includes('школ')) filter = '["amenity"="school"]';
@@ -251,8 +251,8 @@
           if (!point) throw new Error('Укажи отправную точку!');
 
           const radiusMeters = mins * 75;
-          const geo = await geocodeOSM(point);
-          if (!geo) throw new Error('Не нашел точку. Напиши точнее, например: Москва, метро Молодежная');
+          const geo = await geocodePlace(point);
+          if (!geo) throw new Error('Не нашел точку. Попробуй написать точнее, например: Москва метро Молодёжная');
 
           let realPlaces = [];
           try {
@@ -261,7 +261,7 @@
 
           const promptText = `Пользователь ищет друга. Точка: "${point}". Время пешком: ${mins} мин (радиус ${radiusMeters} м). Зацепки: "${hints || 'нет'}". Объекты с карты рядом: ${JSON.stringify(realPlaces)}. Напиши краткий вывод (2-3 предложения), куда вероятнее всего пошел человек. Верни JSON: {"summary": "твой вывод"}`;
 
-          let aiSummary = 'Зона пешей доступности построена по данным карты.';
+          let aiSummary = 'Зона пешей доступности построена по реальным данным карты.';
           try {
             const aiData = await askMistral(apiKey, [{ type: "text", text: promptText }]);
             if (aiData.choices && aiData.choices[0]) {
@@ -269,7 +269,7 @@
             }
           } catch (e) {}
 
-          drawResult(geo.name.split(',')[0], geo.lat, geo.lng, radiusMeters, aiSummary, realPlaces);
+          drawResult(geo.name, geo.lat, geo.lng, radiusMeters, aiSummary, realPlaces);
         } else {
           const hints = document.getElementById('searchHints').value.trim();
           if (!base64Image && !hints) throw new Error('Загрузи фото или напиши подсказки!');
