@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GeoRadar — OSINT и геоаналитика</title>
-  <script src="https://yandex.ru" type="text/javascript"></script>
   <style>
     :root {
       --bg: #0f172a; --panel: #1e293b; --border: #334155;
@@ -14,7 +13,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
     body { background: var(--bg); color: var(--text); display: flex; height: 100vh; overflow: hidden; }
     .sidebar {
-      width: 400px; background: var(--panel); border-right: 1px solid var(--border);
+      width: 420px; background: var(--panel); border-right: 1px solid var(--border);
       display: flex; flex-direction: column; padding: 20px; overflow-y: auto; z-index: 10;
     }
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
@@ -65,9 +64,14 @@
       display: inline-block; background: rgba(59, 130, 246, 0.2); color: #93c5fd;
       padding: 2px 8px; border-radius: 6px; font-size: 11px; margin-bottom: 8px;
     }
-    .poi-list { margin-top: 10px; padding-left: 16px; color: #cbd5e1; }
-    .poi-list li { margin-bottom: 5px; }
-    #map { flex: 1; height: 100vh; width: 100%; background: #1e293b; z-index: 1; }
+    .poi-list { margin-top: 10px; list-style: none; }
+    .poi-item {
+      background: #1e293b; border: 1px solid #334155; padding: 8px 10px;
+      border-radius: 8px; margin-bottom: 6px; cursor: pointer; transition: 0.2s;
+    }
+    .poi-item:hover { border-color: var(--accent); }
+    .map-wrap { flex: 1; height: 100vh; position: relative; background: #1e293b; }
+    iframe { width: 100%; height: 100%; border: none; }
   </style>
 </head>
 <body>
@@ -92,13 +96,13 @@
 
     <div id="modeRadius">
       <label>Отправная точка (метро, адрес, ориентир):</label>
-      <input type="text" id="startPoint" placeholder="Например: Кремль, Москва">
+      <input type="text" id="startPoint" placeholder="Например: метро Молодёжная, Москва">
 
       <label>Время в пути пешком (минут):</label>
       <input type="number" id="walkMinutes" value="5" min="1" max="120">
 
       <label>Дополнительные зацепки (необязательно):</label>
-      <textarea id="radiusHints" placeholder="Например: шёл в какой-то ТЦ..."></textarea>
+      <textarea id="radiusHints" placeholder="Например: шёл в какую-то школу..."></textarea>
     </div>
 
     <div id="modeSearch" style="display: none;">
@@ -119,26 +123,16 @@
       <span class="badge" id="resBadge">Анализ завершен</span>
       <h3 id="resTitle"></h3>
       <p id="resDesc"></p>
-      <ul class="poi-list" id="resList"></ul>
+      <div class="poi-list" id="resList"></div>
     </div>
   </div>
 
-  <div id="map"></div>
+  <div class="map-wrap">
+    <iframe id="yandexFrame" src="https://yandex.ru"></iframe>
+  </div>
   <script>
     let currentMode = 'radius';
     let base64Image = null;
-    let myMap = null;
-
-    // Запуск Яндекс Карт
-    if (typeof ymaps !== 'undefined') {
-      ymaps.ready(function () {
-        myMap = new ymaps.Map('map', {
-          center: [55.7558, 37.6173],
-          zoom: 12,
-          controls: ['zoomControl', 'typeSelector']
-        });
-      });
-    }
 
     window.onload = function() {
       const savedKey = localStorage.getItem('mistral_api_key');
@@ -185,20 +179,9 @@
       reader.readAsDataURL(file);
     });
 
-    async function callMistral(apiKey, content) {
-      const response = await fetch('https://mistral.ai', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + apiKey
-        },
-        body: JSON.stringify({
-          model: 'pixtral-12b-2409',
-          messages: [{ role: 'user', content: content }],
-          response_format: { type: 'json_object' }
-        })
-      });
-      return await response.json();
+    function moveMapTo(lat, lng, zoom) {
+      const frame = document.getElementById('yandexFrame');
+      frame.src = 'https://yandex.ru' + lng + '%2C' + lat + '&z=' + (zoom || 15) + '&pt=' + lng + '%2C' + lat + ',pm2rdm';
     }
 
     async function runAnalysis() {
@@ -225,7 +208,7 @@
           return alert('Укажи отправную точку!');
         }
         const radiusMeters = mins * 75;
-        promptText = 'Ты профессиональный геоаналитик. Отправная точка: "' + point + '". Время пешком: ' + mins + ' минут (радиус ' + radiusMeters + ' м). Зацепки: "' + (hints || 'нет') + '". Определи точные координаты отправной точки и 2-4 реальных объекта рядом в этом радиусе, подходящих под зацепки. Верни строго JSON без markdown: {"title": "Название точки", "lat": 55.7520, "lng": 37.6175, "radius": ' + radiusMeters + ', "summary": "Подробный разбор по карте", "candidates": [{"name": "Название и адрес объекта", "lat": 55.7547, "lng": 37.6215}]}';
+        promptText = 'Ты профессиональный геоаналитик. Отправная точка: "' + point + '". Время пешком: ' + mins + ' минут (примерно ' + radiusMeters + ' м). Зацепки: "' + (hints || 'нет') + '". Определи точные координаты отправной точки и найди 3-4 реальных объекта рядом в этом радиусе, подходящих под зацепки. Верни строго JSON без markdown: {"title": "Название точки", "lat": 55.7412, "lng": 37.4168, "radius": ' + radiusMeters + ', "summary": "Подробный разбор по карте", "candidates": [{"name": "Название и точный адрес объекта", "lat": 55.7430, "lng": 37.4185}]}';
         content.push({ type: 'text', text: promptText });
       } else {
         const hints = document.getElementById('searchHints').value.trim();
@@ -234,56 +217,42 @@
           btn.textContent = 'Найти объект на карте';
           return alert('Загрузи фото или напиши подсказки!');
         }
-        promptText = 'Ты эксперт по OSINT и картам. Найди конкретное место или учреждение по фото и подсказкам: "' + (hints || 'нет') + '". Верни строго JSON без markdown: {"title": "Название и точный адрес", "lat": 55.7558, "lng": 37.6173, "radius": 200, "summary": "Объяснение по карте и фото", "candidates": []}';
+        promptText = 'Ты эксперт по OSINT и картам. Найди конкретное место, здание или учреждение по фото и подсказкам: "' + (hints || 'нет') + '". Верни строго JSON без markdown: {"title": "Название и точный адрес", "lat": 55.7558, "lng": 37.6173, "radius": 200, "summary": "Объяснение по карте и фото", "candidates": []}';
         content.push({ type: 'text', text: promptText });
         if (base64Image) content.push({ type: 'image_url', image_url: base64Image });
       }
 
       try {
-        const data = await callMistral(apiKey, content);
+        const response = await fetch('https://mistral.ai', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + apiKey
+          },
+          body: JSON.stringify({
+            model: 'pixtral-12b-2409',
+            messages: [{ role: 'user', content: content }],
+            response_format: { type: 'json_object' }
+          })
+        });
+
+        const data = await response.json();
         if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
         const rawText = data.choices.at(0).message.content;
         const res = JSON.parse(rawText);
 
-        if (myMap) {
-          myMap.geoObjects.removeAll();
-
-          // Главная метка
-          const mainPlacemark = new ymaps.Placemark([res.lat, res.lng], {
-            balloonContent: '<b>' + res.title + '</b>'
-          }, { preset: 'islands#blueDotIcon' });
-          myMap.geoObjects.add(mainPlacemark);
-
-          // Зона поиска (круг)
-          const searchCircle = new ymaps.Circle([[res.lat, res.lng], res.radius || 375], {}, {
-            fillColor: '#3b82f633',
-            strokeColor: '#3b82f6',
-            strokeOpacity: 0.8,
-            strokeWidth: 2
-          });
-          myMap.geoObjects.add(searchCircle);
-
-          // Точки-кандидаты внутри зоны
-          if (res.candidates && res.candidates.length > 0) {
-            res.candidates.forEach(function(c) {
-              const candMark = new ymaps.Placemark([c.lat, c.lng], {
-                balloonContent: '<b>Возможная точка:</b> ' + c.name
-              }, { preset: 'islands#greenCircleDotIcon' });
-              myMap.geoObjects.add(candMark);
-            });
-          }
-
-          myMap.setCenter([res.lat, res.lng], 15);
-        }
+        moveMapTo(res.lat, res.lng, 15);
 
         const listEl = document.getElementById('resList');
         listEl.innerHTML = '';
         if (res.candidates && res.candidates.length > 0) {
           res.candidates.forEach(function(c) {
-            const li = document.createElement('li');
-            li.textContent = c.name;
-            listEl.appendChild(li);
+            const div = document.createElement('div');
+            div.className = 'poi-item';
+            div.innerHTML = '📍 <b>' + c.name + '</b><br><small style="color:#94a3b8;">Нажми, чтобы показать на карте</small>';
+            div.onclick = function() { moveMapTo(c.lat, c.lng, 17); };
+            listEl.appendChild(div);
           });
         }
 
